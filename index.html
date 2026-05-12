@@ -454,7 +454,12 @@
                 latLngs.push(endLatLng);
 
                 // Draw gradient or styled polyline
-                currentRoutePath = latLngs.slice(); // Store for nav banner
+                currentRoutePath = latLngs.slice(); // For visual
+                // Store pure graph nodes for stable logic (index 1 to length-2 are the graph nodes)
+                currentGraphNodes = pathNodeIds.map(id => {
+                    const coord = campusData.graph.nodes[id];
+                    return [coord[1], coord[0]];
+                });
                 currentRoutePolyline = L.polyline(latLngs, {
                     color: '#007AFF', // iOS blue
                     weight: 6,
@@ -501,7 +506,9 @@
 
         // ─── MAP FOLLOW & TURN-BY-TURN NAVIGATION ───────────────────────────
 
-        let currentRoutePath = []; // Full [lat,lon] array of the drawn route
+        let currentRoutePath = [];
+            currentGraphNodes = []; 
+        let currentGraphNodes = []; // Stable graph nodes for logic
         let isFollowing = false;   // Whether map auto-follows user
 
         // Stop following if user manually pans
@@ -534,20 +541,29 @@
         }
 
         
+        
         function updateNavBanner(userLat, userLon) {
-            if (!currentRoutePath || currentRoutePath.length < 2) return;
+            if (!currentGraphNodes || currentGraphNodes.length < 2) return;
             const banner = document.getElementById('nav-banner');
 
-            // Find closest path segment to user
-            let minDist = Infinity, closestIdx = 0;
-            for (let i = 0; i < currentRoutePath.length - 1; i++) {
-                // Calculate distance to segment instead of just points for better snapping?
-                // For simplicity, sticking to points but checking more segments
-                const d = getDistance(userLat, userLon, currentRoutePath[i][0], currentRoutePath[i][1]);
-                if (d < minDist) { minDist = d; closestIdx = i; }
+            // 1. Find the segment the user is currently on (or approaching)
+            // We look for the segment [i, i+1] where the user is closest to the line
+            let closestSegmentIdx = 0;
+            let minSegmentDist = Infinity;
+
+            for (let i = 0; i < currentGraphNodes.length - 1; i++) {
+                const d = getDistanceToSegment(
+                    userLat, userLon,
+                    currentGraphNodes[i][0], currentGraphNodes[i][1],
+                    currentGraphNodes[i+1][0], currentGraphNodes[i+1][1]
+                );
+                if (d < minSegmentDist) {
+                    minSegmentDist = d;
+                    closestSegmentIdx = i;
+                }
             }
 
-            // Arrival check
+            // Arrival check (use the final destination point)
             const destPt = currentRoutePath[currentRoutePath.length - 1];
             const distToDest = getDistance(userLat, userLon, destPt[0], destPt[1]);
             if (distToDest < 15) {
@@ -557,51 +573,58 @@
                 return;
             }
 
-            // Instruction Logic:
-            // 1. If the next turn is far (>100m), just say "Continue straight"
-            // 2. If a turn is coming up, show it.
-            
-            let distToTurn = 0;
+            // 2. Calculate stable current bearing from the graph segment
+            const currentSegmentBearing = getBearing(
+                currentGraphNodes[closestSegmentIdx][0], currentGraphNodes[closestSegmentIdx][1],
+                currentGraphNodes[closestSegmentIdx + 1][0], currentGraphNodes[closestSegmentIdx + 1][1]
+            );
+
+            // 3. Scan ahead for the next significant turn
+            let distToTurn = getDistance(userLat, userLon, currentGraphNodes[closestSegmentIdx+1][0], currentGraphNodes[closestSegmentIdx+1][1]);
             let turnInstr = { icon: '⬆️', text: 'Continue straight' };
             let foundTurn = false;
 
-            // Get current segment bearing
-            const currentBearing = getBearing(
-                currentRoutePath[closestIdx][0], currentRoutePath[closestIdx][1],
-                currentRoutePath[closestIdx + 1][0], currentRoutePath[closestIdx + 1][1]
-            );
-
-            for (let i = closestIdx + 1; i < currentRoutePath.length - 1; i++) {
-                distToTurn += getDistance(
-                    currentRoutePath[i - 1][0], currentRoutePath[i - 1][1],
-                    currentRoutePath[i][0], currentRoutePath[i][1]
-                );
-
+            for (let i = closestSegmentIdx + 1; i < currentGraphNodes.length - 1; i++) {
                 const nextBearing = getBearing(
-                    currentRoutePath[i][0], currentRoutePath[i][1],
-                    currentRoutePath[i + 1][0], currentRoutePath[i + 1][1]
+                    currentGraphNodes[i][0], currentGraphNodes[i][1],
+                    currentGraphNodes[i+1][0], currentGraphNodes[i+1][1]
                 );
 
-                let diff = nextBearing - currentBearing;
+                let diff = nextBearing - currentSegmentBearing;
                 if (diff > 180) diff -= 360;
                 if (diff < -180) diff += 360;
 
-                if (Math.abs(diff) > 30) { // Significant turn
+                // Threshold: 30 degrees for a turn
+                if (Math.abs(diff) > 30) {
                     turnInstr = getTurnInstruction(diff);
                     foundTurn = true;
                     break;
                 }
                 
-                if (distToTurn > 150) break; // Don't look too far ahead
+                distToTurn += getDistance(
+                    currentGraphNodes[i][0], currentGraphNodes[i][1],
+                    currentGraphNodes[i+1][0], currentGraphNodes[i+1][1]
+                );
+
+                if (distToTurn > 200) break; // Don't look too far
             }
 
             const displayDist = foundTurn ? distToTurn : distToDest;
-            const prefix = foundTurn ? 'In ' : '';
+            const prefix = (foundTurn && displayDist > 20) ? 'In ' : '';
             
             document.getElementById('nav-arrow').textContent = turnInstr.icon;
             document.getElementById('nav-instruction').textContent = turnInstr.text;
             document.getElementById('nav-distance').textContent = prefix + formatDistance(displayDist);
             banner.style.display = 'flex';
+        }
+
+        // Helper for more stable snapping
+        function getDistanceToSegment(px, py, x1, y1, x2, y2) {
+            const l2 = Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2);
+            if (l2 === 0) return getDistance(px, py, x1, y1);
+            let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return getDistance(px, py, x1 + t * (x2 - x1), y1 + t * (y2 - y1));
         }
 
         document.getElementById('cancel-route-btn').addEventListener('click', () => {
@@ -612,6 +635,7 @@
             document.getElementById('gps-button').style.bottom = 'max(30px, env(safe-area-inset-bottom))';
             document.getElementById('nav-banner').style.display = 'none';
             currentRoutePath = [];
+            currentGraphNodes = [];
             isFollowing = false;
             map.setView(userLocation || [12.9915, 80.2337], 15);
         });
