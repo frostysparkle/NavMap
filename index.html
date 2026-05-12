@@ -102,8 +102,11 @@
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         color: white;
         padding: 14px 18px;
-        border-radius: 18px;
+        border-radius: 40px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        width: fit-content;
+        min-width: 260px;
+        padding: 10px 22px;
         display: none;
         align-items: center;
         gap: 14px;
@@ -206,28 +209,34 @@
                 document.getElementById('gps-button').style.transform = 'scale(0.9)';
                 setTimeout(() => document.getElementById('gps-button').style.transform = 'scale(1)', 200);
 
+                
                 watchId = navigator.geolocation.watchPosition(position => {
-                    gpsLocating.style.display = 'none'; // Hide locating state on success
+                    gpsLocating.style.display = 'none'; 
+                    const lat = position.coords.latitude;
+                    const lon = position.coords.longitude;
+                    userLocation = [lat, lon];
                     
-                    gpsLocating.style.display = 'none'; // Ensure hidden
-                    userLocation = [position.coords.latitude, position.coords.longitude];
                     if (!userMarker) {
                         userMarker = L.marker(userLocation, { icon: blueDotIcon }).addTo(map);
-                        map.setView(userLocation, 17);
+                        map.setView(userLocation, 18);
                         isFollowing = true;
                     } else {
                         userMarker.setLatLng(userLocation);
-                        // Follow user if navigating
                         if (isFollowing) {
-                            map.setView(userLocation, map.getZoom());
-                        }
-                        // Update turn-by-turn banner
-                        if (currentDestination && currentRoutePath.length > 0) {
-                            updateNavBanner(userLocation[0], userLocation[1]);
+                            // Zoom at current location and show some path ahead
+                            // Simple approach: set view to user at high zoom
+                            map.setView(userLocation, 18);
                         }
                     }
-                    if (currentDestination && !currentRoutePath.length) {
+
+                    if (currentDestination) {
+                        // Keep recalculating route from current live position
+                        // This ensures turn directions are always relative to where you actually are
                         calculateAndDrawRoute(userLocation, currentDestination, currentDestinationName || "Destination");
+                        
+                        if (currentRoutePath.length > 0) {
+                            updateNavBanner(lat, lon);
+                        }
                     }
                 }, err => {
                     gpsLocating.style.display = 'none'; // Hide on error
@@ -454,8 +463,10 @@
                     lineJoin: 'round'
                 }).addTo(map);
 
-                // Zoom map to fit the route
-                map.fitBounds(currentRoutePolyline.getBounds(), { padding: [50, 50] });
+                // Only fit bounds on first calculation
+                if (!isFollowing) {
+                    map.fitBounds(currentRoutePolyline.getBounds(), { padding: [50, 50] });
+                }
                 
                 // Calculate rough distance
                 let distMeters = 0;
@@ -522,61 +533,71 @@
             return (meters / 1000).toFixed(1) + 'km';
         }
 
+        
         function updateNavBanner(userLat, userLon) {
             if (!currentRoutePath || currentRoutePath.length < 2) return;
             const banner = document.getElementById('nav-banner');
 
-            // Check arrival
-            const lastPt = currentRoutePath[currentRoutePath.length - 1];
-            const distToEnd = getDistance(userLat, userLon, lastPt[0], lastPt[1]);
-            if (distToEnd < 20) {
+            // Find closest path segment to user
+            let minDist = Infinity, closestIdx = 0;
+            for (let i = 0; i < currentRoutePath.length - 1; i++) {
+                // Calculate distance to segment instead of just points for better snapping?
+                // For simplicity, sticking to points but checking more segments
+                const d = getDistance(userLat, userLon, currentRoutePath[i][0], currentRoutePath[i][1]);
+                if (d < minDist) { minDist = d; closestIdx = i; }
+            }
+
+            // Arrival check
+            const destPt = currentRoutePath[currentRoutePath.length - 1];
+            const distToDest = getDistance(userLat, userLon, destPt[0], destPt[1]);
+            if (distToDest < 15) {
                 document.getElementById('nav-arrow').textContent = '🎯';
                 document.getElementById('nav-instruction').textContent = 'You have arrived!';
                 document.getElementById('nav-distance').textContent = 'Destination reached';
                 return;
             }
 
-            // Find closest path segment
-            let minDist = Infinity, closestIdx = 0;
-            for (let i = 0; i < currentRoutePath.length - 1; i++) {
-                const d = getDistance(userLat, userLon, currentRoutePath[i][0], currentRoutePath[i][1]);
-                if (d < minDist) { minDist = d; closestIdx = i; }
-            }
-
-            // Scan ahead for the next significant turn (>20° bearing change)
-            const baseBearing = getBearing(
-                currentRoutePath[closestIdx][0], currentRoutePath[closestIdx][1],
-                currentRoutePath[closestIdx + 1][0], currentRoutePath[closestIdx + 1][1]
-            );
-
+            // Instruction Logic:
+            // 1. If the next turn is far (>100m), just say "Continue straight"
+            // 2. If a turn is coming up, show it.
+            
             let distToTurn = 0;
             let turnInstr = { icon: '⬆️', text: 'Continue straight' };
             let foundTurn = false;
+
+            // Get current segment bearing
+            const currentBearing = getBearing(
+                currentRoutePath[closestIdx][0], currentRoutePath[closestIdx][1],
+                currentRoutePath[closestIdx + 1][0], currentRoutePath[closestIdx + 1][1]
+            );
 
             for (let i = closestIdx + 1; i < currentRoutePath.length - 1; i++) {
                 distToTurn += getDistance(
                     currentRoutePath[i - 1][0], currentRoutePath[i - 1][1],
                     currentRoutePath[i][0], currentRoutePath[i][1]
                 );
+
                 const nextBearing = getBearing(
                     currentRoutePath[i][0], currentRoutePath[i][1],
                     currentRoutePath[i + 1][0], currentRoutePath[i + 1][1]
                 );
-                let diff = nextBearing - baseBearing;
+
+                let diff = nextBearing - currentBearing;
                 if (diff > 180) diff -= 360;
                 if (diff < -180) diff += 360;
 
-                if (Math.abs(diff) > 25) {
+                if (Math.abs(diff) > 30) { // Significant turn
                     turnInstr = getTurnInstruction(diff);
                     foundTurn = true;
                     break;
                 }
+                
+                if (distToTurn > 150) break; // Don't look too far ahead
             }
 
-            // If no turn found, show distance to destination
-            const displayDist = foundTurn ? distToTurn : distToEnd;
+            const displayDist = foundTurn ? distToTurn : distToDest;
             const prefix = foundTurn ? 'In ' : '';
-
+            
             document.getElementById('nav-arrow').textContent = turnInstr.icon;
             document.getElementById('nav-instruction').textContent = turnInstr.text;
             document.getElementById('nav-distance').textContent = prefix + formatDistance(displayDist);
