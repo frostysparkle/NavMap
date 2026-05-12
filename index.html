@@ -189,7 +189,7 @@
                         userMarker.setLatLng(userLocation);
                     }
                     if (currentDestination) {
-                        calculateAndDrawRoute(userLocation, currentDestination, name || "Destination");
+                        calculateAndDrawRoute(userLocation, currentDestination, currentDestinationName || "Destination");
                     }
                 }, err => {
                     gpsLocating.style.display = 'none'; // Hide on error
@@ -217,37 +217,13 @@
             iconAnchor: [11, 11]
         });
 
-        document.getElementById('gps-button').addEventListener('click', () => {
-            if (navigator.geolocation) {
-                if (watchId) navigator.geolocation.clearWatch(watchId);
-                
-                document.getElementById('gps-button').style.transform = 'scale(0.9)';
-                setTimeout(() => document.getElementById('gps-button').style.transform = 'scale(1)', 200);
-
-                watchId = navigator.geolocation.watchPosition(position => {
-                    userLocation = [position.coords.latitude, position.coords.longitude];
-                    if (!userMarker) {
-                        userMarker = L.marker(userLocation, { icon: blueDotIcon }).addTo(map);
-                        map.setView(userLocation, 17);
-                    } else {
-                        userMarker.setLatLng(userLocation);
-                    }
-                    if (currentDestination) {
-                        calculateAndDrawRoute(userLocation, currentDestination, name || "Destination");
-                    }
-                }, err => {
-                    console.error("GPS Error:", err);
-                    showToast("Unable to access GPS location.");
-                }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
-            } else {
-                showToast("Geolocation is not supported by your browser.");
-            }
-        });
+// GPS button listener is defined above
 
         // 2. Search UI Logic
         const searchInput = document.getElementById('search-input');
         const searchResults = document.getElementById('search-results');
         let currentDestination = null;
+        let currentDestinationName = null;
         let destinationMarker = null;
 
         searchInput.addEventListener('input', (e) => {
@@ -277,6 +253,7 @@
                     div.addEventListener('click', () => {
                         searchInput.value = match.name;
                         searchResults.style.display = 'none';
+                        searchInput.blur(); // Dismiss keyboard, allow map scroll
                         setDestination([match.lat, match.lon], match.name);
                     });
                     
@@ -287,9 +264,14 @@
             }
         });
 
-        // Close search results on map click
+        // Close search results on map click/touch (critical for mobile scroll)
         map.on('click', () => {
             searchResults.style.display = 'none';
+            searchInput.blur();
+        });
+        map.on('touchstart', () => {
+            searchResults.style.display = 'none';
+            searchInput.blur();
         });
 
         // 3. Offline Pathfinding Engine (Dijkstra)
@@ -380,6 +362,7 @@
 
         function setDestination(latLng, name) {
             currentDestination = latLng;
+            currentDestinationName = name;
             if (destinationMarker) map.removeLayer(destinationMarker);
             
             destinationMarker = L.marker(currentDestination, {
@@ -395,7 +378,7 @@
             if (userLocation) {
                 calculateAndDrawRoute(userLocation, currentDestination, name || "Destination");
             } else {
-                showToast("Please click the GPS button to route.");
+                showToast("Tap the 📍 button to enable GPS and get directions.");
             }
         }
 
