@@ -230,9 +230,13 @@
                     }
 
                     if (currentDestination) {
-                        // Keep recalculating route from current live position
-                        // This ensures turn directions are always relative to where you actually are
-                        calculateAndDrawRoute(userLocation, currentDestination, currentDestinationName || "Destination");
+                        // Only recalculate if user moved > 2m to prevent flickering
+                        const distSinceLast = lastRecalcLoc ? getDistance(lat, lon, lastRecalcLoc[0], lastRecalcLoc[1]) : Infinity;
+                        
+                        if (distSinceLast > 2) {
+                            calculateAndDrawRoute(userLocation, currentDestination, currentDestinationName || "Destination");
+                            lastRecalcLoc = [lat, lon];
+                        }
                         
                         if (currentRoutePath.length > 0) {
                             updateNavBanner(lat, lon);
@@ -255,6 +259,7 @@
         let userMarker = null;
         let userLocation = null;
         let watchId = null;
+        let lastRecalcLoc = null;
         
         // Create custom blue dot icon
         const blueDotIcon = L.divIcon({
@@ -636,6 +641,7 @@
             document.getElementById('nav-banner').style.display = 'none';
             currentRoutePath = [];
             currentGraphNodes = [];
+            lastRecalcLoc = null;
             isFollowing = false;
             map.setView(userLocation || [12.9915, 80.2337], 15);
         });
