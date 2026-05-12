@@ -1,0 +1,18 @@
+# Project config - not for deployment
+GEMINI.md
+
+# Build/dev scripts
+fix_structure.js
+fix_final.js
+fix_app_final.js
+update_ui.js
+fetch_and_parse.js
+parse_data.js
+query.overpass
+
+# Raw data (baked into index.html)
+*.geojson
+
+# OS files
+.DS_Store
+Thumbs.db
