@@ -80,6 +80,17 @@
         Notification
     </div>
 
+    <!-- Map Tile Download Progress -->
+    <div id="tile-progress-bar" style="position: fixed; bottom: 0; left: 0; width: 100%; z-index: 3000; display: none; flex-direction: column; align-items: center; background: rgba(26,26,46,0.95); backdrop-filter: blur(12px); padding: 10px 20px 12px; gap: 6px; border-top: 1px solid rgba(255,255,255,0.08);">
+        <div style="display:flex; justify-content:space-between; width:100%; max-width:400px;">
+            <span style="font-size:13px; font-weight:600; color:rgba(255,255,255,0.9);">📥 Caching map for offline use…</span>
+            <span id="tile-progress-pct" style="font-size:13px; font-weight:700; color:#4EB8FF;">0%</span>
+        </div>
+        <div style="width:100%; max-width:400px; height:4px; background:rgba(255,255,255,0.15); border-radius:4px; overflow:hidden;">
+            <div id="tile-progress-fill" style="height:100%; width:0%; background:linear-gradient(90deg,#007AFF,#4EB8FF); border-radius:4px; transition:width 0.4s ease;"></div>
+        </div>
+    </div>
+
     <!-- Bottom Route Card -->
     <div id="route-card" style="position: absolute; bottom: 0; left: 0; width: 100%; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); z-index: 1500; border-radius: 24px 24px 0 0; box-shadow: 0 -8px 32px rgba(0,0,0,0.1); transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); padding-bottom: max(24px, env(safe-area-inset-bottom)); display: flex; flex-direction: column;">
         <div style="width: 40px; height: 5px; background: rgba(0,0,0,0.15); border-radius: 3px; margin: 12px auto;"></div>
@@ -201,6 +212,7 @@
         const gpsLocating = document.getElementById('gps-locating');
         
         document.getElementById('gps-button').addEventListener('click', () => {
+            startCompass(); // Request compass permission on the same user gesture
             if (navigator.geolocation) {
                 gpsLocating.style.display = 'flex'; // Show locating state
                 
@@ -261,13 +273,108 @@
         let watchId = null;
         let lastRecalcLoc = null;
         
-        // Create custom blue dot icon
+        // ─── COMPASS-AWARE USER MARKER ───────────────────────────────────────
+        // The marker is a blue dot with an arrow that rotates to show heading.
+        // The arrow element (#user-arrow) is rotated via CSS transform.
+        function makeUserDotHtml(headingDeg) {
+            return `
+                <div id="user-dot-root" style="position:relative; width:40px; height:40px; display:flex; align-items:center; justify-content:center;">
+                    <!-- Heading arrow cone (shown when compass available) -->
+                    <div id="user-arrow" style="
+                        position:absolute;
+                        top:0; left:50%; transform:translateX(-50%) rotate(${headingDeg}deg);
+                        transform-origin: center bottom;
+                        width:0; height:0;
+                        border-left: 7px solid transparent;
+                        border-right: 7px solid transparent;
+                        border-bottom: 22px solid rgba(66,133,244,0.55);
+                        transition: transform 0.3s ease;
+                        display:${headingDeg !== null ? 'block' : 'none'};
+                    "></div>
+                    <!-- Blue dot -->
+                    <div style="
+                        width:18px; height:18px;
+                        background:#4285F4;
+                        border-radius:50%;
+                        border:3px solid white;
+                        box-shadow:0 0 0 4px rgba(66,133,244,0.25), 0 2px 6px rgba(0,0,0,0.3);
+                        z-index:1;
+                        flex-shrink:0;
+                    "></div>
+                </div>`;
+        }
+
         const blueDotIcon = L.divIcon({
-            className: 'blue-dot-wrapper',
-            html: '<div style="width: 16px; height: 16px; background: #4285F4; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.4);"></div>',
-            iconSize: [22, 22],
-            iconAnchor: [11, 11]
+            className: 'user-location-icon',
+            html: makeUserDotHtml(null),
+            iconSize: [40, 40],
+            iconAnchor: [20, 20]
         });
+
+        // ─── COMPASS / DEVICE ORIENTATION ────────────────────────────────────
+        let currentHeading = null;
+
+        function applyHeading(degrees) {
+            currentHeading = degrees;
+            const arrowEl = document.getElementById('user-arrow');
+            if (!arrowEl) return;
+            // degrees: 0 = north, 90 = east (same as CSS rotate)
+            arrowEl.style.transform = `translateX(-50%) rotate(${degrees}deg)`;
+            arrowEl.style.display = 'block';
+        }
+
+        function startCompass() {
+            if (typeof DeviceOrientationEvent !== 'undefined') {
+                // iOS 13+ requires explicit permission
+                if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission()
+                        .then(state => {
+                            if (state === 'granted') listenOrientation();
+                        }).catch(console.warn);
+                } else {
+                    listenOrientation();
+                }
+            }
+        }
+
+        function listenOrientation() {
+            window.addEventListener('deviceorientationabsolute', onOrient, true);
+            window.addEventListener('deviceorientation', onOrient, true);
+        }
+
+        function onOrient(e) {
+            let heading = null;
+            if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+                // iOS: webkitCompassHeading is degrees from north, clockwise
+                heading = e.webkitCompassHeading;
+            } else if (e.absolute && e.alpha !== null) {
+                // Android absolute: alpha is degrees counterclockwise from north
+                heading = (360 - e.alpha) % 360;
+            } else if (!e.absolute && e.alpha !== null) {
+                // Android non-absolute: approximate
+                heading = (360 - e.alpha) % 360;
+            }
+            if (heading !== null) applyHeading(Math.round(heading));
+        }
+
+        // ─── SW TILE CACHE PROGRESS LISTENER ─────────────────────────────────
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', e => {
+                if (e.data && e.data.type === 'TILE_CACHE_PROGRESS') {
+                    const bar = document.getElementById('tile-progress-bar');
+                    const fill = document.getElementById('tile-progress-fill');
+                    const pct = document.getElementById('tile-progress-pct');
+                    if (!bar) return;
+                    bar.style.display = 'flex';
+                    const p = e.data.progress;
+                    fill.style.width = p + '%';
+                    pct.textContent = p + '%';
+                    if (p >= 100) {
+                        setTimeout(() => { bar.style.display = 'none'; }, 2000);
+                    }
+                }
+            });
+        }
 
 // GPS button listener is defined above
 
