@@ -81,12 +81,15 @@
     </div>
 
     <!-- Map Tile Download Progress -->
-    <div id="tile-progress-bar" style="position: fixed; bottom: 0; left: 0; width: 100%; z-index: 3000; display: none; flex-direction: column; align-items: center; background: rgba(26,26,46,0.95); backdrop-filter: blur(12px); padding: 10px 20px 12px; gap: 6px; border-top: 1px solid rgba(255,255,255,0.08);">
-        <div style="display:flex; justify-content:space-between; width:100%; max-width:400px;">
-            <span style="font-size:13px; font-weight:600; color:rgba(255,255,255,0.9);">📥 Caching map for offline use…</span>
-            <span id="tile-progress-pct" style="font-size:13px; font-weight:700; color:#4EB8FF;">0%</span>
+    <div id="tile-progress-bar" style="position: fixed; top: 16px; left: 50%; transform: translateX(-50%); width: 90%; max-width: 320px; z-index: 3000; display: none; flex-direction: column; align-items: center; background: rgba(26,26,46,0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); padding: 10px 16px; gap: 8px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 16px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; width:100%; align-items: center;">
+            <span style="font-size:12px; font-weight:600; color:rgba(255,255,255,0.9); display: flex; align-items: center; gap: 6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #4EB8FF;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Caching offline map
+            </span>
+            <span id="tile-progress-pct" style="font-size:12px; font-weight:700; color:#4EB8FF;">0%</span>
         </div>
-        <div style="width:100%; max-width:400px; height:4px; background:rgba(255,255,255,0.15); border-radius:4px; overflow:hidden;">
+        <div style="width:100%; height:4px; background:rgba(255,255,255,0.15); border-radius:4px; overflow:hidden;">
             <div id="tile-progress-fill" style="height:100%; width:0%; background:linear-gradient(90deg,#007AFF,#4EB8FF); border-radius:4px; transition:width 0.4s ease;"></div>
         </div>
     </div>
@@ -149,6 +152,26 @@
             maxNativeZoom: 19,
             maxZoom: 19
         }).addTo(map);
+
+        // Request initial location immediately
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(position => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                userLocation = [lat, lon];
+                
+                if (!userMarker) {
+                    userMarker = L.marker(userLocation, { icon: blueDotIcon }).addTo(map);
+                } else {
+                    userMarker.setLatLng(userLocation);
+                }
+                
+                // Zoom to user location immediately on successful location grab
+                map.setView(userLocation, 18);
+            }, (error) => {
+                console.log("Could not get initial location. Defaulting to Gajendra Circle.");
+            }, { timeout: 5000, enableHighAccuracy: true });
+        }
         
         // 1. Create the Cookie Cutter Mask
         const worldCoords = [
