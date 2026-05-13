@@ -1,13 +1,13 @@
 // ─── CACHE VERSIONING ────────────────────────────────────────────────────────
-const CACHE_NAME = 'navmap-v5';
-const TILES_CACHE = 'navmap-tiles-v2';
+const CACHE_NAME = 'navmap-v6';
+const TILES_CACHE = 'navmap-tiles-v3';
 
 // ─── CAMPUS BOUNDING BOX ─────────────────────────────────────────────────────
 // IIT Madras campus with a small buffer
 const BOUNDS = { S: 12.978, N: 13.008, W: 80.220, E: 80.248 };
 // Zoom 14-17: good quality, manageable tile count (~900 tiles)
-const TILE_ZOOM_MIN = 14;
-const TILE_ZOOM_MAX = 17;
+const TILE_ZOOM_MIN = 13;
+const TILE_ZOOM_MAX = 18;
 
 // ─── APP SHELL ────────────────────────────────────────────────────────────────
 const ASSETS_TO_CACHE = [
@@ -47,7 +47,7 @@ function getAllCampusTileUrls() {
 
 // ─── INSTALL: Cache app shell immediately, tiles deferred ────────────────────
 self.addEventListener('install', event => {
-  console.log('[SW] Installing v5…');
+  console.log('[SW] Installing v6…');
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
       console.log('[SW] Caching app shell');
@@ -68,8 +68,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function cacheCampusTiles() {
   const urls = getAllCampusTileUrls();
   const cache = await caches.open(TILES_CACHE);
-  const BATCH = 5;        // Small batches to avoid hammering OSM
-  const DELAY_MS = 300;   // 300ms between batches
+  const BATCH = 15;        // Medium batches to avoid hammering OSM but speed up caching
+  const DELAY_MS = 200;   // 200ms between batches
   let cached = 0;
   let skipped = 0;
   console.log(`[SW] Starting tile pre-cache: ${urls.length} tiles, z${TILE_ZOOM_MIN}-z${TILE_ZOOM_MAX}`);
@@ -101,7 +101,7 @@ async function cacheCampusTiles() {
 
     // Notify clients of progress
     const progress = Math.min(Math.round(((i + BATCH) / urls.length) * 100), 100);
-    self.clients.matchAll().then(clients => {
+    self.clients.matchAll({ includeUncontrolled: true, type: 'window' }).then(clients => {
       clients.forEach(c => c.postMessage({
         type: 'TILE_CACHE_PROGRESS',
         progress,
@@ -117,7 +117,7 @@ async function cacheCampusTiles() {
 
 // ─── ACTIVATE: Clean up old caches ───────────────────────────────────────────
 self.addEventListener('activate', event => {
-  console.log('[SW] Activating v5…');
+  console.log('[SW] Activating v6…');
   event.waitUntil(
     caches.keys().then(cacheNames =>
       Promise.all(

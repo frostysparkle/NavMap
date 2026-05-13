@@ -174,10 +174,9 @@
                 weight: 3
             }).addTo(map);
             
-            // Set map bounds to campus
             const bounds = L.latLngBounds(campusBoundaryCoords);
             map.setMaxBounds(bounds);
-            map.fitBounds(bounds);
+            // map.fitBounds(bounds); // Removed to respect the initial setView zoom at Gajendra Circle
         }
         
         // Hide loading screen when map is ready
