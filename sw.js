@@ -1,12 +1,13 @@
 // ─── CACHE VERSIONING ────────────────────────────────────────────────────────
-const CACHE_NAME = 'navmap-v4';
-const TILES_CACHE = 'navmap-tiles-v1';
+const CACHE_NAME = 'navmap-v5';
+const TILES_CACHE = 'navmap-tiles-v2';
 
 // ─── CAMPUS BOUNDING BOX ─────────────────────────────────────────────────────
-// IIT Madras with buffer
-const BOUNDS = { S: 12.977, N: 13.010, W: 80.218, E: 80.250 };
-const TILE_ZOOM_MIN = 13;
-const TILE_ZOOM_MAX = 18;
+// IIT Madras campus with a small buffer
+const BOUNDS = { S: 12.978, N: 13.008, W: 80.220, E: 80.248 };
+// Zoom 14-17: good quality, manageable tile count (~900 tiles)
+const TILE_ZOOM_MIN = 14;
+const TILE_ZOOM_MAX = 17;
 
 // ─── APP SHELL ────────────────────────────────────────────────────────────────
 const ASSETS_TO_CACHE = [
@@ -29,7 +30,6 @@ function lat2tile(lat, z) {
 
 function getAllCampusTileUrls() {
   const urls = [];
-  // OSM has 3 subdomains: a, b, c — spread load evenly
   const subdomains = ['a', 'b', 'c'];
   let sd = 0;
   for (let z = TILE_ZOOM_MIN; z <= TILE_ZOOM_MAX; z++) {
@@ -45,27 +45,34 @@ function getAllCampusTileUrls() {
   return urls;
 }
 
-// ─── INSTALL: Cache app shell + pre-cache all campus tiles ────────────────────
+// ─── INSTALL: Cache app shell immediately, tiles deferred ────────────────────
 self.addEventListener('install', event => {
-  console.log('[SW] Installing…');
+  console.log('[SW] Installing v5…');
   event.waitUntil(
-    Promise.all([
-      // 1. Cache the app shell immediately
-      caches.open(CACHE_NAME).then(cache => {
-        console.log('[SW] Caching app shell');
-        return cache.addAll(ASSETS_TO_CACHE);
-      }),
-      // 2. Pre-fetch all campus tiles in background (batched to avoid memory pressure)
-      cacheCampusTiles()
-    ]).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => {
+      console.log('[SW] Caching app shell');
+      return cache.addAll(ASSETS_TO_CACHE);
+    }).then(() => {
+      console.log('[SW] App shell cached, skipping waiting');
+      return self.skipWaiting();
+    })
+  );
+  // Start tile caching in background WITHOUT blocking install
+  event.waitUntil(
+    self.skipWaiting().then(() => cacheCampusTiles())
   );
 });
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function cacheCampusTiles() {
   const urls = getAllCampusTileUrls();
   const cache = await caches.open(TILES_CACHE);
-  const BATCH = 10; // Fetch 10 tiles at a time
+  const BATCH = 5;        // Small batches to avoid hammering OSM
+  const DELAY_MS = 300;   // 300ms between batches
   let cached = 0;
+  let skipped = 0;
+  console.log(`[SW] Starting tile pre-cache: ${urls.length} tiles, z${TILE_ZOOM_MIN}-z${TILE_ZOOM_MAX}`);
 
   for (let i = 0; i < urls.length; i += BATCH) {
     const batch = urls.slice(i, i + BATCH);
@@ -73,32 +80,44 @@ async function cacheCampusTiles() {
       batch.map(async url => {
         try {
           const existing = await cache.match(url);
-          if (!existing) {
-            const resp = await fetch(url);
-            if (resp.ok) {
-              await cache.put(url, resp);
-              cached++;
-            }
-          } else {
+          if (existing) {
+            skipped++;
+            cached++;
+            return;
+          }
+          const resp = await fetch(url, {
+            headers: { 'User-Agent': 'IITMNavMap/1.0' },
+            cache: 'no-store'
+          });
+          if (resp.ok) {
+            await cache.put(url, resp);
             cached++;
           }
         } catch (e) {
-          // Silently fail on individual tiles — partial cache is fine
+          // Silently skip failed tiles — partial cache is fine
         }
       })
     );
-    // Notify any connected clients of progress
-    const progress = Math.round(((i + BATCH) / urls.length) * 100);
+
+    // Notify clients of progress
+    const progress = Math.min(Math.round(((i + BATCH) / urls.length) * 100), 100);
     self.clients.matchAll().then(clients => {
-      clients.forEach(c => c.postMessage({ type: 'TILE_CACHE_PROGRESS', progress: Math.min(progress, 100), total: urls.length, cached }));
+      clients.forEach(c => c.postMessage({
+        type: 'TILE_CACHE_PROGRESS',
+        progress,
+        total: urls.length,
+        cached
+      }));
     });
+
+    await sleep(DELAY_MS);
   }
-  console.log(`[SW] Tile pre-cache complete: ${cached}/${urls.length} tiles`);
+  console.log(`[SW] Tile pre-cache done: ${cached}/${urls.length} tiles cached (${skipped} already existed)`);
 }
 
 // ─── ACTIVATE: Clean up old caches ───────────────────────────────────────────
 self.addEventListener('activate', event => {
-  console.log('[SW] Activating…');
+  console.log('[SW] Activating v5…');
   event.waitUntil(
     caches.keys().then(cacheNames =>
       Promise.all(
@@ -117,13 +136,15 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // OSM tiles → cache-first (never stale)
+  // OSM tiles → cache-first
   if (url.hostname.endsWith('tile.openstreetmap.org')) {
     event.respondWith(
       caches.match(event.request).then(cached => {
         if (cached) return cached;
         return fetch(event.request).then(resp => {
-          caches.open(TILES_CACHE).then(c => c.put(event.request, resp.clone()));
+          if (resp.ok) {
+            caches.open(TILES_CACHE).then(c => c.put(event.request, resp.clone()));
+          }
           return resp;
         }).catch(() => new Response('', { status: 404 }));
       })
@@ -131,14 +152,16 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // App shell → stale-while-revalidate
+  // App shell → cache-first with network fallback
   event.respondWith(
     caches.match(event.request).then(cached => {
-      const network = fetch(event.request).then(resp => {
-        caches.open(CACHE_NAME).then(c => c.put(event.request, resp.clone()));
+      const networkFetch = fetch(event.request).then(resp => {
+        if (resp.ok) {
+          caches.open(CACHE_NAME).then(c => c.put(event.request, resp.clone()));
+        }
         return resp;
-      }).catch(() => {});
-      return cached || network;
+      }).catch(() => cached);
+      return cached || networkFetch;
     })
   );
 });
