@@ -153,26 +153,7 @@
             maxZoom: 19
         }).addTo(map);
 
-        // Request initial location immediately
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(position => {
-                const lat = position.coords.latitude;
-                const lon = position.coords.longitude;
-                userLocation = [lat, lon];
-                
-                if (!userMarker) {
-                    userMarker = L.marker(userLocation, { icon: blueDotIcon }).addTo(map);
-                } else {
-                    userMarker.setLatLng(userLocation);
-                }
-                
-                // Zoom to user location immediately on successful location grab
-                map.setView(userLocation, 18);
-            }, (error) => {
-                console.log("Could not get initial location. Defaulting to Gajendra Circle.");
-            }, { timeout: 5000, enableHighAccuracy: true });
-        }
-        
+
         // 1. Create the Cookie Cutter Mask
         const worldCoords = [
             [90, -180], [90, 180], [-90, 180], [-90, -180]
@@ -332,6 +313,26 @@
             iconSize: [40, 40],
             iconAnchor: [20, 20]
         });
+
+        // Request initial location immediately
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(position => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                userLocation = [lat, lon];
+                
+                if (!userMarker) {
+                    userMarker = L.marker(userLocation, { icon: blueDotIcon }).addTo(map);
+                } else {
+                    userMarker.setLatLng(userLocation);
+                }
+                
+                // Zoom to user location immediately on successful location grab
+                map.setView(userLocation, 18);
+            }, (error) => {
+                console.log("Could not get initial location. Defaulting to Gajendra Circle.");
+            }, { timeout: 5000, enableHighAccuracy: true });
+        }
 
         // ─── COMPASS / DEVICE ORIENTATION ────────────────────────────────────
         let currentHeading = null;
