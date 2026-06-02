@@ -132,6 +132,18 @@ self.addEventListener('activate', event => {
   );
 });
 
+// ─── MESSAGE LISTENER: Handle client requests ──────────────────────────────
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'REFRESH_TILES') {
+    console.log('[SW] Refreshing tile cache as requested by client...');
+    event.waitUntil(
+      caches.delete(TILES_CACHE).then(() => {
+        return cacheCampusTiles();
+      })
+    );
+  }
+});
+
 // ─── FETCH: Cache-first for tiles, stale-while-revalidate for app ─────────────
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
