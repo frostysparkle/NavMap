@@ -134,7 +134,7 @@
 
     <script>
         let campusData = null;
-        let map, userMarker, userLocation, watchId, lastRecalcLoc, currentHeading, currentDestination, currentDestinationName, destinationMarker, currentRoutePolyline, currentRoutePath = [], currentGraphNodes = [], isFollowing = false, toastTimeout, campusBounds;
+        let map, userMarker, userLocation, watchId, lastRecalcLoc, currentHeading, currentDestination, currentDestinationName, destinationMarker, currentRoutePolyline, currentRoutePath = [], currentGraphNodes = [], isFollowing = false, toastTimeout, campusBounds, userHeading = null, lastLoc = null;
 
         // --- PHASE 3 LOGIC (Dijkstra, Distance, etc.) ---
         
@@ -495,6 +495,15 @@ out geom;`;
             const handlePosition = (position, isInitial = false) => {
                 const lat = position.coords.latitude, lon = position.coords.longitude;
                 
+                // Track user heading based on GPS movement
+                if (lastLoc) {
+                    const movedDist = getDistance(lastLoc[0], lastLoc[1], lat, lon);
+                    if (movedDist > 2) {
+                        userHeading = getBearing(lastLoc[0], lastLoc[1], lat, lon);
+                    }
+                }
+                lastLoc = [lat, lon];
+
                 // Geofencing check
                 if (campusBounds && !campusBounds.contains([lat, lon])) {
                     if (!isInitial) {
@@ -516,12 +525,21 @@ out geom;`;
                 }
                 
                 if (currentDestination) {
-                    const distSinceLast = lastRecalcLoc ? getDistance(lat, lon, lastRecalcLoc[0], lastRecalcLoc[1]) : Infinity;
-                    if (distSinceLast > 2) {
+                    if (currentRoutePath.length === 0) {
                         calculateAndDrawRoute(userLocation, currentDestination, currentDestinationName || "Destination");
-                        lastRecalcLoc = [lat, lon];
+                    } else {
+                        let minDistToRoute = Infinity;
+                        for (let i = 0; i < currentRoutePath.length - 1; i++) {
+                            const d = getDistanceToSegment(lat, lon, currentRoutePath[i][0], currentRoutePath[i][1], currentRoutePath[i+1][0], currentRoutePath[i+1][1]);
+                            if (d < minDistToRoute) minDistToRoute = d;
+                        }
+                        // Recalculate if off-route by > 12 meters (more aggressive for missed turns)
+                        if (minDistToRoute > 12) {
+                            calculateAndDrawRoute(userLocation, currentDestination, currentDestinationName || "Destination");
+                        } else {
+                            updateNavBanner(lat, lon);
+                        }
                     }
-                    if (currentRoutePath.length > 0) updateNavBanner(lat, lon);
                 }
             };
 
@@ -651,27 +669,52 @@ out geom;`;
             }
             const dest = currentRoutePath[currentRoutePath.length - 1];
             const distToDest = getDistance(lat, lon, dest[0], dest[1]);
-            if (distToDest < 15) {
+            if (distToDest < 12) {
                 document.getElementById('nav-arrow').textContent = '🎯';
                 document.getElementById('nav-instruction').textContent = 'You have arrived!';
                 document.getElementById('nav-distance').textContent = 'Destination reached';
                 return;
             }
-            const currentBearing = getBearing(currentGraphNodes[closestIdx][0], currentGraphNodes[closestIdx][1], currentGraphNodes[closestIdx+1][0], currentGraphNodes[closestIdx+1][1]);
-            let distToTurn = getDistance(lat, lon, currentGraphNodes[closestIdx+1][0], currentGraphNodes[closestIdx+1][1]);
+            
+            let currentBearing = getBearing(currentGraphNodes[closestIdx][0], currentGraphNodes[closestIdx][1], currentGraphNodes[closestIdx+1][0], currentGraphNodes[closestIdx+1][1]);
+            
+            // Check if user is walking wrong way
+            if (userHeading !== null) {
+                let diff = currentBearing - userHeading;
+                if (diff > 180) diff -= 360; if (diff < -180) diff += 360;
+                if (Math.abs(diff) > 135) {
+                    document.getElementById('nav-arrow').textContent = '↩️';
+                    document.getElementById('nav-instruction').textContent = 'Turn around';
+                    document.getElementById('nav-distance').textContent = 'Walking wrong way';
+                    document.getElementById('nav-banner').style.display = 'flex';
+                    return;
+                }
+            }
+
             let turnInstr = { icon: '⬆️', text: 'Continue straight' }, found = false;
+            let distToTurn = getDistance(lat, lon, currentGraphNodes[closestIdx+1][0], currentGraphNodes[closestIdx+1][1]);
+            
             for (let i = closestIdx + 1; i < currentGraphNodes.length - 1; i++) {
                 const nextB = getBearing(currentGraphNodes[i][0], currentGraphNodes[i][1], currentGraphNodes[i+1][0], currentGraphNodes[i+1][1]);
                 let diff = nextB - currentBearing;
                 if (diff > 180) diff -= 360; if (diff < -180) diff += 360;
-                if (Math.abs(diff) > 30) { turnInstr = getTurnInstruction(diff); found = true; break; }
+                
+                // Ignore micro-curves, only announce real turns > 25 degrees
+                if (Math.abs(diff) > 25) { 
+                    turnInstr = getTurnInstruction(diff); 
+                    found = true; 
+                    break; 
+                }
+                // Update bearing for sequential segment checks
+                currentBearing = nextB;
                 distToTurn += getDistance(currentGraphNodes[i][0], currentGraphNodes[i][1], currentGraphNodes[i+1][0], currentGraphNodes[i+1][1]);
                 if (distToTurn > 200) break;
             }
+            
             const d = found ? distToTurn : distToDest;
             document.getElementById('nav-arrow').textContent = turnInstr.icon;
             document.getElementById('nav-instruction').textContent = turnInstr.text;
-            document.getElementById('nav-distance').textContent = (found && d > 20 ? 'In ' : '') + formatDistance(d);
+            document.getElementById('nav-distance').textContent = (found && d > 10 ? 'In ' : '') + formatDistance(d);
             document.getElementById('nav-banner').style.display = 'flex';
         }
 
@@ -682,13 +725,13 @@ out geom;`;
             return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
         }
         function getTurnInstruction(diff) {
-            if (Math.abs(diff) < 20) return { icon: '⬆️', text: 'Continue straight' };
-            if (diff >= 20 && diff < 50) return { icon: '↗️', text: 'Bear right' };
-            if (diff >= 50 && diff < 130) return { icon: '➡️', text: 'Turn right' };
-            if (diff >= 130) return { icon: '↩️', text: 'Sharp right' };
-            if (diff <= -20 && diff > -50) return { icon: '↖️', text: 'Bear left' };
-            if (diff <= -50 && diff > -130) return { icon: '⬅️', text: 'Turn left' };
-            return { icon: '↪️', text: 'Sharp left' };
+            if (Math.abs(diff) < 25) return { icon: '⬆️', text: 'Continue straight' };
+            if (diff >= 25 && diff < 60) return { icon: '↗️', text: 'Slight right' };
+            if (diff >= 60 && diff < 120) return { icon: '➡️', text: 'Turn right' };
+            if (diff >= 120) return { icon: '↩️', text: 'Make a U-turn' };
+            if (diff <= -25 && diff > -60) return { icon: '↖️', text: 'Slight left' };
+            if (diff <= -60 && diff > -120) return { icon: '⬅️', text: 'Turn left' };
+            return { icon: '↪️', text: 'Make a U-turn' };
         }
         function formatDistance(m) { return m < 50 ? Math.round(m) + 'm' : (m < 1000 ? (Math.round(m/10)*10) + 'm' : (m/1000).toFixed(1) + 'km'); }
         function getDistanceToSegment(px, py, x1, y1, x2, y2) {
